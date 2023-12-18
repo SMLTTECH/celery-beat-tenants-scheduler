@@ -1,15 +1,19 @@
 # celery-beat-tenants-scheduler
-DatabaseScheduler adapted for use with django-tenants
+A DatabaseScheduler adaptation designed for use with django-tenants.
 
 # tenant_celery_scheduler
-Планировщик задач на основе DatabaseScheduler. Позволяет конфигурировать периодические задачи Celery для каждого тенанта отдельно.
-## Установка:
-0. Настроить django-tenants, django-tenants-celery
-1. В settings.py: проекта
+Task scheduler based on DatabaseScheduler. Allows configuration Celery tasks in DB for each individual tenant. Precisely tested with these types of tasks: 
+- periodic
+- crontab
+
+## Installation:
+1. First, configure `django-tenants` and `django-tenants-celery` as you need.
+2. `django_celery_beat` must be in your `TENANT_APPS`
+3. Specify the scheduler in the settings.py of your project:
 ```python
 CELERY_BEAT_SCHEDULER = "celery_beat_tenants_scheduler.scheduler.TenantDatabaseScheduler"
 ```
-Или в docker-compose/helm (docker-compose.yml)
+or in docker-compose.yml
 ```
-command: celery -A catalog beat -l debug --scheduler celery_beat_tenants_scheduler.scheduler.TenantDatabaseScheduler
+command: celery -A project beat -l debug --scheduler celery_beat_tenants_scheduler.scheduler.TenantDatabaseScheduler
 ```
