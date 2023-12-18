@@ -1,9 +1,10 @@
 import logging
 from typing import ClassVar
 
-from django.db import close_old_connections, models, transaction
+from django.core.cache import cache
+from django.db import close_old_connections, transaction
 from django.db.utils import DatabaseError, InterfaceError
-from django_celery_beat.schedulers import DatabaseScheduler, ModelEntry
+from django_celery_beat.schedulers import ADD_ENTRY_ERROR, DatabaseScheduler, ModelEntry
 from django_tenants.utils import get_public_schema_name, get_tenant_model, schema_context
 from tenant_schemas_celery.scheduler import TenantAwareScheduleEntry
 
@@ -38,13 +39,19 @@ class TenantDatabaseScheduler(DatabaseScheduler):
     diffs: ClassVar[dict] = {}
 
     @classmethod
-    def get_queryset(cls) -> models.QuerySet:
-        return TenantModel.objects.all()
+    def get_schemas_list(cls) -> list:
+        schemas_cache = cache.get("scheduler_schemas_list")
+        if schemas_cache:
+            return schemas_cache
+        schemas = list(TenantModel.objects.values_list("schema_name", flat=True))
+        schemas.append(get_public_schema_name())
+        cache.set("scheduler_schemas_list", schemas, 60)  # one minute cache
+
+        return schemas
 
     def all_as_schedule(self):
         schedule = {}
-        schemas = list(self.get_queryset().values_list("schema_name", flat=True))
-        schemas.append(get_public_schema_name())
+        schemas = self.get_schemas_list()
 
         for schema in schemas:
             with schema_context(schema):
@@ -78,8 +85,8 @@ class TenantDatabaseScheduler(DatabaseScheduler):
                 logger.debug("%s sent. id->%s", entry.task, result.id)
 
     def schedule_changed(self):
-        schemas = list(self.get_queryset().values_list("schema_name", flat=True))
-        schemas.append(get_public_schema_name())
+        schemas = self.get_schemas_list()
+
         for schema in schemas:
             with schema_context(schema):
                 try:
@@ -106,3 +113,19 @@ class TenantDatabaseScheduler(DatabaseScheduler):
                 finally:
                     self.diffs[schema] = ts
         return False
+
+    def update_from_dict(self, mapping):
+        schemas = self.get_schemas_list()
+
+        for schema in schemas:
+            with schema_context(schema):
+                schemas_for_schedule = {}
+                for name, entry_fields in mapping.items():
+                    try:
+                        entry = self.Entry.from_entry(name, app=self.app, **entry_fields)
+                        if entry.model.enabled:
+                            schemas_for_schedule[name] = entry
+
+                    except Exception as exc:
+                        logger.exception(ADD_ENTRY_ERROR, name, exc, entry_fields)
+                self.schedule.update(schemas_for_schedule)
