@@ -33,6 +33,16 @@ class TenantModelEntry(ModelEntry, TenantAwareScheduleEntry):
         next_entry.tenant_schemas = self.tenant_schemas
         return next_entry
 
+    def save(self):
+        with schema_context(self.tenant_schemas[0]):
+            super().save()
+
+    def _disable(self, model):
+        with schema_context(self.tenant_schemas[0]):
+            model.no_changes = True
+            model.enabled = False
+            model.save()
+
 
 class TenantDatabaseScheduler(DatabaseScheduler):
     Entry = TenantModelEntry
@@ -61,6 +71,16 @@ class TenantDatabaseScheduler(DatabaseScheduler):
                     except ValueError as e:
                         logger.error(e)
         return schedule
+
+    def reserve(self, entry):
+        with schema_context(entry.tenant_schemas[0]):
+            new_entry = next(entry)
+            self._dirty.add(f"{new_entry.tenant_schemas[0]}:{new_entry.name}")
+            return new_entry
+
+    def is_due(self, entry):
+        with schema_context(entry.tenant_schemas[0]):
+            return entry.is_due()
 
     def apply_entry(self, entry: TenantModelEntry, producer=None):
         logger.info(
@@ -119,13 +139,13 @@ class TenantDatabaseScheduler(DatabaseScheduler):
 
         for schema in schemas:
             with schema_context(schema):
-                schemas_for_schedule = {}
+                s = {}
                 for name, entry_fields in mapping.items():
                     try:
                         entry = self.Entry.from_entry(name, app=self.app, **entry_fields)
                         if entry.model.enabled:
-                            schemas_for_schedule[name] = entry
+                            s[name] = entry
 
                     except Exception as exc:
                         logger.exception(ADD_ENTRY_ERROR, name, exc, entry_fields)
-                self.schedule.update(schemas_for_schedule)
+                self.schedule.update(s)
